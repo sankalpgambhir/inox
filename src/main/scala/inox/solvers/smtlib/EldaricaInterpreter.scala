@@ -8,12 +8,21 @@ import smtlib.theories.Core._
 import scala.collection.mutable.TreeSet
 import smtlib.theories.ArraysEx
 
-
-class EldaricaInterpreter(executableName: String,
+/**
+  * [[ProcessInterpreter]] specific to Eldarica to intercept unsupported
+  * uninterpreted function declarations and calls and transform them into Array
+  * declarations and selections respectively. 
+  *
+  * @param executable path to executable
+  * @param args command-line arguments for solver executable
+  * @param printer printer for SMTLIB expressions
+  * @param parserCtor parser (cosntructor) for solver output
+  */
+class EldaricaInterpreter(executable: String,
                     args: Array[String],
                     printer: smtlib_.printer.Printer = smtlib_.printer.RecursivePrinter,
                     parserCtor: java.io.BufferedReader => smtlib_.parser.Parser = out => new smtlib_.parser.Parser(new smtlib_.lexer.Lexer(out)))
-extends ProcessInterpreter(executableName, args, printer, parserCtor) {
+extends ProcessInterpreter(executable, args, printer, parserCtor) {
 
   private val uninterpretedSymbols: TreeSet[String] = TreeSet.empty
 
@@ -42,7 +51,7 @@ extends ProcessInterpreter(executableName, args, printer, parserCtor) {
     * 
     * For a function declaration:
     * 
-    * (declare-fun f (s1 s2 ... sn) sOut) -> (declare-const f (Array s1 (... (Array sn sOut)))) 
+    * `(declare-fun f (s1 s2 ... sn) sOut)` -> `(declare-const f (Array s1 (... (Array sn sOut))))`
     */
   def transformFunctionDeclaration(decl: DeclareFun): DeclareFun | DeclareConst = 
     def toTransform: Boolean =
@@ -68,7 +77,7 @@ extends ProcessInterpreter(executableName, args, printer, parserCtor) {
     * 
     * For an application:
     * 
-    * `f(x1, x2, ..., xn) -> (select (... (select f x1) ...) xn)`
+    * `f(x1, x2, ..., xn)` -> `(select (... (select f x1) ...) xn)`
     *
     * @param app function application term
     * @return transformed SExpr or original if unneeded
