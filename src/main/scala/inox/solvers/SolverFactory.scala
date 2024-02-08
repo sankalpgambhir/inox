@@ -56,6 +56,13 @@ object SolverFactory {
     case _: java.io.IOException => false
   }
 
+  lazy val hasEldarica = try {
+    smtlib.EldaricaInterpreter.default.interrupt()
+    true
+  } catch {
+    case _: java.io.IOException => false
+  }
+
   def create[S1 <: Solver](p: Program)(nme: String, builder: () => S1 { val program: p.type }):
            SolverFactory { val program: p.type; type S = S1 { val program: p.type } } = {
     class Impl(override val program: p.type, override val name: String) extends SolverFactory {
@@ -78,7 +85,8 @@ object SolverFactory {
     "smt-z3"        -> "Z3 through SMT-LIB",
     "smt-z3-opt"    -> "Z3 optimizer through SMT-LIB",
     "smt-z3:<exec>" -> "Z3 through SMT-LIB with custom executable name",
-    "princess"      -> "Princess with inox unrolling"
+    "princess"      -> "Princess with inox unrolling",
+    "smt-eldarica"  -> "Eldarica through SMT-LIB"
   )
 
   private val fallbacks = Map(
@@ -89,7 +97,8 @@ object SolverFactory {
     "smt-cvc5"     -> (() => hasCVC5,     Seq("nativez3", "smt-z3", "princess"),               "'cvc5' binary"),
     "smt-z3"       -> (() => hasZ3,       Seq("nativez3", "smt-cvc4", "smt-cvc5", "princess"), "'z3' binary"),
     "smt-z3-opt"   -> (() => hasZ3,       Seq("nativez3-opt"),                                 "'z3' binary"),
-    "princess"     -> (() => true,        Seq(),                                               "Princess solver")
+    "princess"     -> (() => true,        Seq(),                                               "Princess solver"),
+    "smt-eldarica" -> (() => hasEldarica, Seq("smt-z3", "smt-cvc5", "princess"),               "'eldarica' Horn solver binary")
   )
 
   private var reported: Boolean = false
@@ -115,9 +124,10 @@ object SolverFactory {
       noPrefixName != "smt-cvc5" &&
       noPrefixName != "unrollz3" &&
       noPrefixName != "smt-z3" &&
-      !noPrefixName.startsWith("smt-z3:")
+      !noPrefixName.startsWith("smt-z3:") &&
+      noPrefixName != "smt-eldarica"
     )
-      throw FatalError(s"Non incremental mode is not available for solver $name")
+      throw FatalError(s"Non-incremental mode is not available for solver $name")
 
     val finalName = if (force) {
       noPrefixName
@@ -343,6 +353,37 @@ object SolverFactory {
         () => new SMTCVC5Impl(p)(enc)(ChooseEncoder(p)(enc))
       })
 
+      case "smt-eldarica" => create(p)(finalName, {
+        val ev = sem.getEvaluator(using ctx)
+        class SMTEldaricaImpl(override val program: p.type)
+                             (override val enc: transformers.ProgramTransformer {
+                               val sourceProgram: program.type
+                               val targetProgram: Program { val trees: inox.trees.type }
+                             })
+                             (override val chooses: ChooseEncoder {
+                               val program: p.type
+                               val sourceEncoder: enc.type
+                             })
+          extends AbstractUnrollingSolver(program, ctx, enc, chooses)(fullEncoder => theories.CVC(fullEncoder)(ev))
+            with UnrollingSolver
+            with TimeoutSolver
+            with tip.TipDebugger {
+
+          class Underlying(override val program: targetProgram.type)
+            extends smtlib.SMTLIBSolver(program, ctx)
+              with smtlib.EldaricaSolver
+
+          def instantiateSolver = nonIncrementalWrap(targetProgram)(finalName, targetSemantics, () => new Underlying(targetProgram))
+
+          protected val underlying = instantiateSolver
+
+          // encoder is from TipDebugger and enc from AbstractUnrollingSolver
+          override protected val encoder = enc
+        }
+
+        () => new SMTEldaricaImpl(p)(enc)(ChooseEncoder(p)(enc))
+      })
+
       case "princess" => create(p)(finalName, {
         val chooseEnc = ChooseEncoder(p)(enc)
         class PrincessImpl(override val program: p.type)
@@ -362,7 +403,8 @@ object SolverFactory {
     s == "no-inc:smt-z3" ||
     s == "no-inc:smt-cvc4" ||
     s == "no-inc:smt-cvc5" ||
-    s == "no-inc:unrollz3"
+    s == "no-inc:unrollz3" ||
+    s == "no-inc:smt-eldarica"
 
   def getFromSettings(p: Program, ctx: Context)
                      (enc: ProgramTransformer {
