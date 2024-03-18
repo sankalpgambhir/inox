@@ -12,6 +12,7 @@ import smtlib_.theories.cvc._
 import smtlib_.interpreters.ProcessInterpreter
 import java.io.BufferedWriter
 import smtlib_.Interpreter
+import scala.collection.mutable.TreeSet
 
 trait EldaricaTarget extends SMTLIBTarget with SMTLIBDebugger {
   import context.{given, _}
@@ -162,4 +163,120 @@ trait EldaricaTarget extends SMTLIBTarget with SMTLIBDebugger {
     case _ =>
       super.toSMT(e)
   }
+
+  // query transformation
+  // uninterpreted function elimination
+
+  import smtlib_.trees.Terms.*
+
+  private val uninterpretedSymbols: TreeSet[String] = TreeSet.empty
+
+  def addTransformedSymbol(s: SSymbol): Unit =
+    uninterpretedSymbols += s.name
+
+  def isUninterpreted(s: SSymbol): Boolean =
+    uninterpretedSymbols.contains(s.name)
+
+  def clearUninterpretedSymbols(): Unit =
+    uninterpretedSymbols.clear()
+
+  /**
+    * Transform a function declaration to erase uninterpreted functions. If the
+    * function is a predicate or a constant, returns the definition as is, else,
+    * creates a new constant array definition from it.
+    * 
+    * For a function declaration:
+    * 
+    * `(declare-fun f (s1 s2 ... sn) sOut)` -> `(declare-const f (Array s1 (... (Array sn sOut))))`
+    */
+  def transformFunctionDeclaration(decl: DeclareFun): DeclareFun | DeclareConst = 
+    def toTransform: Boolean =
+      decl.returnSort != Core.BoolSort() // is not a predicate
+      && decl.paramSorts.length > 0 // is not a constant
+
+    def doTransform: DeclareConst =
+      val sort = decl.paramSorts.foldRight(decl.returnSort)((nextInp, inner) => ArraysEx.ArraySort(nextInp, inner))
+      DeclareConst(decl.name, sort)
+
+    def registerSymbol(): Unit =
+      addTransformedSymbol(decl.name)
+    
+    if toTransform then 
+      registerSymbol()
+      doTransform 
+    else 
+      decl
+
+  /**
+    * For any uninterpreted definitions we have captured and transformed to
+    * arrays, transform function calls to array selections.
+    * 
+    * For an application:
+    * 
+    * `f(x1, x2, ..., xn)` -> `(select (... (select f x1) ...) xn)`
+    *
+    * @param app function application term
+    * @return transformed SExpr or original if unneeded
+    */
+  def transformCall(app: FunctionApplication): Term = 
+    def toTransform: Boolean =
+      isUninterpreted(app.fun.id.symbol) // have we seen this as an uninterpreted def?
+
+    def doTransform: Term = 
+      // f(x1, x2, ..., xn) -> (select (... (select f x1) ...) xn)
+      val args = app.terms.map(transformTerm)
+      if toTransform then
+        args.foldLeft(app.fun: Term)((inner, nextArg) => ArraysEx.Select(inner, nextArg))
+      else
+        FunctionApplication(app.fun, args)
+
+    doTransform
+
+  /**
+    * Transform a term changing calls to transformed uninterpreted functions
+    * into array selections.
+    * 
+    * Assumes that function symbol names cannot be used in quantifiers. 
+    */
+  def transformTerm(term: Term): Term = 
+    term match
+      case smtlib_.trees.Terms.Let(binding, bindings, term) => smtlib_.trees.Terms.Let(binding, bindings, transformTerm(term))
+      case smtlib_.trees.Terms.Forall(sortedVar, sortedVars, term) => smtlib_.trees.Terms.Forall(sortedVar, sortedVars, transformTerm(term))
+      case Exists(sortedVar, sortedVars, term) => Exists(sortedVar, sortedVars, transformTerm(term))
+      case QualifiedIdentifier(_, _) => term
+      case AnnotatedTerm(term, attribute, attributes) => AnnotatedTerm(transformTerm(term), attribute, attributes)
+      case app @ FunctionApplication(_, _) => transformCall(app)
+      case _ => term
+    
+
+  /**
+    * Transform a top-level command to erase uninterpreted functions. See
+    * [[transformFunctionDeclaration]] or [[transformCall]] for details.
+    */
+  def transformCommand(expr: Command): Command =
+    expr match
+      case Assert(term) => Assert(transformTerm(term))
+      case decl @ DeclareFun(_, _, _) => transformFunctionDeclaration(decl)
+      case GetValue(term, terms) => GetValue(transformTerm(term), terms.map(transformTerm))
+      case _ => expr
+    
+  /**
+    * Transform a top-level SExpr if it is a command. See [[transformCommand]].
+    */
+  def transformSExpr(expr: SExpr): SExpr =
+    expr match
+      case cmd: Command => transformCommand(cmd)
+      case _ => expr
+
+  override def emit(cmd: SExpr, rawOut: Boolean): SExpr = 
+    val transformed = transformSExpr(cmd)
+    super.emit(transformed, rawOut)
+
+  override def free(): Unit = 
+    clearUninterpretedSymbols()
+    super.free()
+
+  override def interrupt(): Unit = 
+    clearUninterpretedSymbols()
+    super.interrupt()
 }
