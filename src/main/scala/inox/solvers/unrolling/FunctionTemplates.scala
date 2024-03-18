@@ -7,6 +7,7 @@ package unrolling
 import utils._
 
 import scala.collection.mutable.{Set => MutableSet, Map => MutableMap}
+import ap.terfor.TerForConvenience.quantify
 
 trait FunctionTemplates { self: Templates =>
   import context.{given, _}
@@ -118,6 +119,54 @@ trait FunctionTemplates { self: Templates =>
 
     mkSubstituter((asT zip args).toMap)(call)
   }
+
+  def genClauses(tfd: TypedFunDef): Clauses = 
+    val body = tfd.fullBody
+
+    val quants = tfd.fd.params // :+ ValDef(FreshIdentifier("res", true), tfd.returnType)
+
+    val encode = mkEncoder(Map.empty)
+
+    def guarded(guard: Expr, body: Expr): Expr =
+      Implies(guard, body)
+
+    def quantify(clause: Expr): Expr =
+      Forall(quants, clause)
+
+    def rec(expr: Expr): Expr =
+      if expr.getType == tfd.getType then
+        Equals(tfd.applied, recInner(expr))
+      else
+        recInner(expr)
+
+    def recInner(expr: Expr): Expr =
+      expr match
+        case Assume(cond, body) =>
+          guarded(cond, rec(body))
+        case Choose(res, pred) => ???
+        case Let(vd, value, body) =>
+          val guard = Equals(vd.toVariable, value)
+          guarded(guard, rec(body))
+        case Not(e) =>
+          Not(rec(e))
+        case And(es) =>
+          And(es.map(rec)) // TODO: see what to do about "non-simple" expressions
+        case Or(es) =>
+          Or(es.map(rec)) // TODO: see what to do about "non-simple" expressions
+          // TODO: is the non simple one sound? since it does some weird splitting
+        case IfExpr(cond, thenn, elze) =>
+          val guardedThen = guarded(cond, rec(thenn))
+          val guardedElse = guarded(Not(cond), rec(elze))
+          And(Seq(guardedThen, guardedElse))
+        case Lambda(args, body) => ???
+        case Forall(args, body) => ???
+        case Equals(lhs, rhs) => Equals(rec(lhs), rec(rhs))
+        case Operator(args, reconstructor) => 
+          reconstructor(args.map(recInner))
+    
+    val inner = rec(body)
+    val quantified = quantify(inner)
+    Seq(encode(quantified))
 
   private[unrolling] object functionsManager extends Manager {
     // Function instantiations have their own defblocker
@@ -237,7 +286,13 @@ trait FunctionTemplates { self: Templates =>
                 val templateClauses = Template.instantiate(clauses, calls, apps, matchers, equalities, substMap)
                 substClauses ++ templateClauses
               } getOrElse {
-                FunctionTemplate(tfd).instantiate(defBlocker, args ++ tpSubst)
+                // here an instantiated defblocked encoding is registered.
+                // Instead, register the whole definition
+                // the defblocking behaviour stays the same ig?
+                // val t = FunctionTemplate(tfd)
+                // val res = FunctionTemplate(tfd).instantiate(defBlocker, args ++ tpSubst)
+                val res = genClauses(tfd)
+                res
               }
             }
 

@@ -319,7 +319,7 @@ trait TemplateGenerator { self: Templates =>
     }
   }
 
-  protected def mkExprClauses(
+  protected def mkExprClauses( // this is ONLY for expressions, not definitions
     pathVar: Variable,
     expr: Expr,
     substMap: Map[Variable, Encoded],
@@ -328,7 +328,8 @@ trait TemplateGenerator { self: Templates =>
     val builder = new Builder(pathVar, substMap)
     import builder._
 
-    def rec(pathVar: Variable, expr: Expr, pol: Option[Boolean]): Expr = expr match {
+    def rec(pathVar: Variable, expr: Expr, pol: Option[Boolean]): Expr = 
+      expr match {
       case a @ Assume(cond, body) =>
         val e = rec(pathVar, cond, Some(true))
         storeGuarded(pathVar, e)
@@ -517,7 +518,10 @@ trait TemplateGenerator { self: Templates =>
         storeEquality(pathVar, re1, re2)
         Application(v, Seq(re1, re2))
 
-      case Operator(as, r) => r(as.map(a => rec(pathVar, a, None)))
+      case Operator(as, r) => 
+        val as2 = as
+        val r2 = r
+        r(as.map(a => rec(pathVar, a, None)))
     }
 
     val p = rec(pathVar, expr, polarity)
