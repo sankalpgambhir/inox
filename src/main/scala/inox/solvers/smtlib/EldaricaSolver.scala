@@ -32,8 +32,10 @@ trait EldaricaSolver extends SMTLIBSolver with EldaricaTarget {
   }
 
   override def checkAssumptions(config: Configuration)(assumptions: Set[Expr]) = {
+    push()
     for (cl <- assumptions) assertCnstr(cl)
     val res: SolverResponse[Model, Assumptions] = check(Model min config)
+    pop()
 
     config.cast(res match {
       case Unsat if config.withUnsatAssumptions =>
