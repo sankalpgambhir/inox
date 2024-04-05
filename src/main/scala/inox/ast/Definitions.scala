@@ -519,7 +519,7 @@ trait Definitions { self: Trees =>
 
   /** Represents a [[FunDef]] whose type parameters have been instantiated with the specified types */
   case class TypedFunDef(fd: FunDef, tps: Seq[Type])(using val symbols: Symbols) extends Tree {
-    require(tps.length == fd.tparams.length)
+    require(tps.length == fd.tparams.length, s"On ${fd.id}")
     copiedFrom(fd)
 
     val id = fd.id
