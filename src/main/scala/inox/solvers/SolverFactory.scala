@@ -303,6 +303,7 @@ object SolverFactory {
               parser.parseGenResponse
 
               override def eval(cmd: Terms.SExpr): Terms.SExpr = 
+                println(s"{SENDING} $cmd")
                 super.eval(cmd)
 
             override protected val interpreter = {
@@ -312,8 +313,7 @@ object SolverFactory {
             }
           }
 
-          override protected val underlying =
-            nonIncrementalWrap(targetProgram)(finalName, targetSemantics, () => new Underlying(targetProgram))
+          override protected val underlying = Underlying(targetProgram)
 
           // encoder is from TipDebugger and enc from AbstractUnrollingSolver
           override protected val encoder = emptyEnc
@@ -375,8 +375,7 @@ object SolverFactory {
             }
           }
 
-          override protected val underlying =
-            nonIncrementalWrap(targetProgram)(finalName, targetSemantics, () => new Underlying(targetProgram))
+          override protected val underlying = Underlying(targetProgram)
 
           // encoder is from TipDebugger and enc from AbstractUnrollingSolver
           override protected val encoder = emptyEnc
